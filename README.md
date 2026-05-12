@@ -1,13 +1,16 @@
 # pget - Password Management tool
+![Password Manager](https://img.shields.io/badge/Type-Password%20Manager-darkred) ![Passwords](https://img.shields.io/badge/Passwords-Encrypted-critical) ![Secrets](https://img.shields.io/badge/Secrets-Protected-success) ![Vault](https://img.shields.io/badge/Vault-GPG%20Encrypted-red)  ![Shell](https://img.shields.io/badge/Shell-POSIX%20sh-black) ![Linux](https://img.shields.io/badge/Platform-Linux-darkgreen) ![Encryption](https://img.shields.io/badge/Encryption-GPG%20AES256-red) ![Security](https://img.shields.io/badge/Security-Local%20Vault-critical) ![Terminal](https://img.shields.io/badge/UI-Terminal-lightgrey)
+![No Cloud](https://img.shields.io/badge/Cloud-None-success)
 
 pget is a feature rich interactive Linux CLI bash based Password Management tool using GPG-(AES256) backed encryption.<p>
-<img src="./gallery/02-PGET-Search_Results_For_bank.jpg" width="70%"><br>
-<a href=./gallery><font size=4>View Gallery</font></a>
+
+<img src="./gallery/02-PGET-Search_Results_For_bank.jpg" width="70%"><p>
+<a href=./gallery><b>VIEW GALLERY</b></font></a>
 
 ---
 ## Security Model Overview
 The following is a security-focused comparison between pget and a typical cloud-based password management tools. 
-<br>Read the full <a href=./SECRURITY_REVIEW.md>SECURITY REVIEW</a>. 
+<br>Read the full <a href=./SECURITY_Review.md><b>Security Review</b></a>. 
 
 | Security Area | pget | Cloud Password Manager |
 | --- | --- | --- |
@@ -63,7 +66,7 @@ The following is a security-focused comparison between pget and a typical cloud-
 
 ---
 
-## INSTALLATION
+## Installation
 
 There are 2 installations methods that can be used: Automated and Manual.
 
@@ -125,7 +128,7 @@ That's it!
 
 ---
 
-# Test Installation:
+## Test Installation:
 **1. Test vim encryption**
 ```
 $ vim test.gpg
@@ -147,9 +150,17 @@ To confirm the file can be decrypted:
    $ gpg -d test.gpg
 ```
 
-# Start pget
+## Launch pget
 pget will go through a first time launch process.
 ```
    $ ./pget
 ```
 
+Each time afer, use a search pattern
+```
+   $ ./pget pattern
+```
+
+## Support
+
+Use the Discussion Group for any comments or feature requests, and Issues to report any issues.
