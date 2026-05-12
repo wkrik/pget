@@ -163,4 +163,6 @@ Each time afer, use a search pattern
 
 ## Support
 
+First check out he <a href=/docs/Troubleshooting.md>Troubleshoot</a> guide.
+
 Use the Discussion Group for any comments or feature requests, and Issues to report any issues.
