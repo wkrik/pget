@@ -1,38 +1,44 @@
 # F.A.Q Troubleshooting
+1. VIM will not encrypt my password
+2. AES256.CFB is not known
+3. Can I force AES256 explicitly
+4. Dialog box borders render incorrectly when entering master password
 
-### VIM will not encrypt my password
-### AES256.CFB is not known
-### Dialog box borders render incorrectly when entering master password
+---
 
-## VIM will not encrypt my password
-1. check that you login as the true user. 
+### 1. VIM will not encrypt my password
+* Check that you login as the true user. 
 Not "superuser" and switched to the user: su - [user]
 vim and pget require direct access to the actual user's tty
-2. If testing vim + encryption, make sure you have 
+* If testing vim + encryption, make sure you have 
 write permissions in the current directory you are in.
 
-## AES256.CFB is not known
+---
+
+### 2. AES256.CFB is not known
 When vim launches a red warning message appears briefly:
 
   *The cipher AES256.CFB is not known by the local gpg command. Using default!*
 
-### Cause:
+#### Cause:
 vim-gnupg detects the encryption mode as AES256.CFB, while GPG
 reports supported ciphers as AES256. The mode suffix (.CFB) is not
 recognized by GPG as part of the cipher name, so vim-gnupg falls
 back to the default, which is AES256.
 
-### Impact:
+#### Impact:
 None. The file remains encrypted using AES256.
 
-### Verification:
+#### Verification:
 You can confirm the cipher type after editing with the command:
 
   gpg --list-packets Primary.gpg | grep -i 'symkey enc packet\|encrypted data'
 
 Expected output should indicate AES256.
 
-### Can I force AES256 explicitly:
+---
+
+### 3. Can I force AES256 explicitly:
 Yes. If it makes you feel more comfortable, set AES256 in your 
 GPG configuration:
 
@@ -40,11 +46,13 @@ GPG configuration:
 
 This makes AES256 the default for all symmetric encryption operations.
 
+---
 
-## Dialog box borders render incorrectly when entering master password
+### 4 Dialog box borders render incorrectly when entering master password
 
 When asked for the master password, and this is displayed:
 
+```
 lqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqk
 x Enter passphrase                                     x
 x                                                      x
@@ -53,9 +61,11 @@ x Passphrase: ________________________________________ x
 x                                                      x
 x       <OK>                              <Cancel>     x
 mqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqj
+```
 
 When this was expected:
 
+```
 ┌──────────────────────────────┐
 │ Enter passphrase             │
 │                              │
@@ -63,6 +73,7 @@ When this was expected:
 │                              │
 │   <OK>      <Cancel>         │
 └──────────────────────────────┘
+```
 
 That’s classic pinentry-curses using ASCII fallback instead of 
 Unicode/line-drawing characters. Those lqqq...k / x / mqqq...j 
