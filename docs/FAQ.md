@@ -1,8 +1,10 @@
-# F.A.Q Troubleshooting
+# Troubleshooting
 1. VIM will not encrypt my password
 2. AES256.CFB is not known
 3. Can I force AES256 explicitly
 4. Dialog box borders render incorrectly when entering master password
+5. Fedora: dnf can't install "pwgen"
+6. Fedora: The encryption fails on the vim test.
 
 ---
 
@@ -111,4 +113,35 @@ EOF
 pinentry-tty is plain text, no box graphics at all.
 $ gpgconf --kill gpg-agent
 
+---
 
+### 5. Fedora: dnf can't install "pwgen"
+pwgen is not part of the main fedora Enterprise main repo. It is part of the Extened Release and requires **epel-release** to be installed first.
+```
+$ setup_pget -f fedora
+No match for argument: **pwgen**
+Error: Unable to find a match: pwgen
+[ERROR] dnf install failed.
+```
+**FIX:**
+```
+$ sudo dnf install epel-release
+
+$ ./setup_pget -f fedora
+```
+
+---
+
+### 6. Fedora: The encryption fails when exiting vim.
+When exiting vim, the system should prompt for a passphrase. On some Fedora installs, GPG is unable to prompt for the symmetric passphrase when Vim tries to re-encrypt. This error is displayed:
+
+```
+"Message could not be encrypted"
+```
+
+**FIX**
+The pinentry program  is the secure password prompt program used by GPG and for some reason some Fedora installs don't include it as a dependency for gnupg. After installing the pinentry programs it should work.
+
+```
+$ sudo dnf install pinentry pinentry-curses
+```
