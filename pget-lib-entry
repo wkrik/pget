@@ -1,0 +1,390 @@
+#!/usr/bin/env bash
+
+# ------------------------------------------------------------
+# pget-lib-entry
+# Entry add/modify/delete logic and password generation
+#
+# Required for pget to function
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# FIELD VALIDATION
+# ------------------------------------------------------------
+entry_has_tab() {
+  case "$1" in
+    *$'\t'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+reject_tab_field() {
+  if entry_has_tab "$1"; then
+    printf "\nTabs are not allowed inside a field. Use a '|' verticle bar as a separator\n "
+    printf "Press [enter] to return..."
+    IFS= read -r _
+    return 1
+  fi
+  return 0
+}
+
+# ------------------------------------------------------------
+# PASSWORD GENERATION
+# ------------------------------------------------------------
+generate_password() {
+  local cmd
+
+  cmd="${PWGEN%% *}"
+
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    printf "Password generator not found: %s\n" "$cmd"
+    return 1
+  fi
+
+  eval "$PWGEN"
+}
+
+choose_generated_password() {
+  local generated answer
+
+  while :; do
+    generated=$(generate_password) || return 1
+    printf "Generated password: %s\n" "$generated"
+    read_prompt answer "Use this password (Y/n/g)? "
+    printf "\n"
+
+    case "$answer" in
+      ""|y|Y)
+        secret="$generated"
+        return 0
+        ;;
+      g|G)
+        printf "\n"
+        continue
+        ;;
+      n|N)
+        return 1
+        ;;
+      *)
+        printf "Enter y to use, n for manual entry, or g to regenerate.\n"
+        ;;
+    esac
+  done
+}
+
+prompt_secret_add() {
+  local input
+
+  while :; do
+    read_prompt input "Secret [g=generate]: "
+    printf "\n"
+
+    case "$input" in
+      g|G)
+        if choose_generated_password; then
+          return
+        fi
+        ;;
+      *)
+        secret="$input"
+        return
+        ;;
+    esac
+  done
+}
+
+prompt_secret_modify() {
+  local old_value input
+
+  old_value="$1"
+
+  while :; do
+    read_prompt input "Secret [$old_value] [g=generate]: "
+    printf "\n"
+
+    case "$input" in
+      g|G)
+        if choose_generated_password; then
+          return
+        fi
+        ;;
+      "")
+        secret="$old_value"
+        return
+        ;;
+      *)
+        secret="$input"
+        return
+        ;;
+    esac
+  done
+}
+
+password_generator() {
+  local answer
+
+  restore_terminal_for_prompt
+  draw_header
+  printf "\n\nPassword Generator\n\n"
+
+  if choose_generated_password; then
+    printf "\nCopy generated password to clipboard (Y/n)? "
+    read -r answer
+    case "$answer" in
+      ""|y|Y)
+        copy_to_clipboard "$secret"
+        printf "\nCopied.\n"
+        ;;
+    esac
+  fi
+
+  printf "\nPress [enter] to return..."
+  IFS= read -r _
+  restore_terminal_for_ui
+  draw_window
+}
+
+# ------------------------------------------------------------
+# ADD ENTRY
+# ------------------------------------------------------------
+add_entry() {
+  local title id secret comments new_line confirm
+
+  restore_terminal_for_prompt
+  draw_header
+  printf "\n\nAdd Entry\n--------------------\n\n"
+
+  while :; do
+    read_prompt title "Title: "
+    reject_tab_field "$title" || { restore_terminal_for_ui; draw_window; return; }
+    [ -n "$title" ] && break
+    printf "Title is required.\n\n"
+  done
+
+  printf "\n"
+  read_prompt id "ID: "
+  reject_tab_field "$id" || { restore_terminal_for_ui; draw_window; return; }
+
+  prompt_secret_add
+  reject_tab_field "$secret" || { restore_terminal_for_ui; draw_window; return; }
+
+  printf "\nComments (separate with '|')\n"
+  printf "ie. Contract ID 12345 | support@acme1234.com | http://acme1234.com\n"
+  read_prompt comments ": "
+  reject_tab_field "$comments" || { restore_terminal_for_ui; draw_window; return; }
+
+  new_line=$(make_entry_line "$title" "$id" "$secret" "$comments")
+
+  printf "\nSave this entry (y/N)? "
+  read_edit confirm
+  case "$confirm" in
+    y|Y) ;;
+    *)
+      restore_terminal_for_ui
+      draw_window
+      return
+      ;;
+  esac
+
+  load_all_vault_lines || {
+    printf "\nFailed to load vault. No changes were made.\n"
+    printf "Press [enter] to return..."
+    IFS= read -r _
+    restore_terminal_for_ui
+    draw_window
+    return
+  }
+
+  backup_current_vault
+  vault_all_lines+=("$new_line")
+
+  if write_all_vault_lines; then
+    printf "\nEntry added.\n"
+  else
+    printf "\nFailed to save entry.\n"
+    printf "Press [enter] to return..."
+    IFS= read -r _
+  fi
+
+  restore_terminal_for_ui
+
+  if [ ${#lines[@]} -eq 0 ]; then
+    pattern="$title"
+  fi
+
+  refresh_after_change
+}
+
+# ------------------------------------------------------------
+# MODIFY ENTRY
+# ------------------------------------------------------------
+modify_entry() {
+  local old_line title id secret comments new_line confirm replaced i
+  local old_title old_id old_secret old_comments
+
+  [ ${#lines[@]} -eq 0 ] && return
+
+  old_line="${lines[$index]}"
+  split_entry_line "$old_line"
+
+  restore_terminal_for_prompt
+
+  draw_header
+  printf "\nUse .clear to clear, blank, or null a field."
+  printf "\n\nEdit/Modify Entry\n--------------------\n\n"
+
+  while :; do
+    read_prompt title "Title [$old_title]: "
+    [ -z "$title" ] && title="$old_title"
+    reject_tab_field "$title" || { restore_terminal_for_ui; draw_window; return; }
+    [ -n "$title" ] && break
+    printf "Title is required.\n"
+  done
+
+  printf "\n"
+  read_prompt id "ID [$old_id]: "
+  [ -z "$id" ] && id="$old_id"
+  [ "$id" = ".clear" ] && id=""
+  reject_tab_field "$id" || { restore_terminal_for_ui; draw_window; return; }
+
+  prompt_secret_modify "$old_secret"
+  [ "$secret" = ".clear" ] && secret=""
+  reject_tab_field "$secret" || { restore_terminal_for_ui; draw_window; return; }
+
+  printf "\nComments [$old_comments]\n"
+  read_prompt comments ": "
+  [ -z "$comments" ] && comments="$old_comments"
+  [ "$comments" = ".clear" ] && comments=""
+  reject_tab_field "$comments" || { restore_terminal_for_ui; draw_window; return; }
+
+  new_line=$(make_entry_line "$title" "$id" "$secret" "$comments")
+
+  printf "\nSave changes to this entry (y/N)? "
+  read_edit confirm
+  case "$confirm" in
+    y|Y) ;;
+    *)
+      restore_terminal_for_ui
+      draw_window
+      return
+      ;;
+  esac
+
+  load_all_vault_lines || {
+    printf "\nFailed to load vault. No changes were made.\n"
+    printf "Press [enter] to return..."
+    IFS= read -r _
+    restore_terminal_for_ui
+    draw_window
+    return
+  }
+
+  backup_current_vault
+
+  replaced=0
+  for ((i=0; i<${#vault_all_lines[@]}; i++)); do
+    if [ "$replaced" -eq 0 ] && [ "${vault_all_lines[$i]}" = "$old_line" ]; then
+      vault_all_lines[$i]="$new_line"
+      replaced=1
+      break
+    fi
+  done
+
+  if [ "$replaced" -eq 0 ]; then
+    printf "\nSelected entry was not found in vault.\n"
+    printf "Press [enter] to return..."
+    IFS= read -r _
+    restore_terminal_for_ui
+    draw_window
+    return
+  fi
+
+  if write_all_vault_lines; then
+    printf "\nEntry modified.\n"
+  else
+    printf "\nFailed to save entry.\n"
+    printf "Press [enter] to return..."
+    IFS= read -r _
+  fi
+
+  restore_terminal_for_ui
+  refresh_after_change
+}
+
+# ------------------------------------------------------------
+# DELETE ENTRY
+# ------------------------------------------------------------
+delete_entry() {
+  local old_line confirm i removed
+  local old_title old_id old_secret old_comments
+
+  [ ${#lines[@]} -eq 0 ] && return
+
+  old_line="${lines[$index]}"
+
+  restore_terminal_for_prompt
+
+  draw_header
+  printf "\n\nDelete Entry\n--------------------------------\n"
+  split_entry_line "$old_line"
+  printf "\nTitle : %s\n\n" "$old_title"
+  printf "ID    : %s\n" "$old_id"
+  printf "Secret: %s\n\n" "$old_secret"
+  printf "COMMENTS\n"
+  if [ -n "$old_comments" ]; then
+    printf ": %s" "$old_comments"
+  fi
+  printf "\n\n"
+
+  read_prompt confirm "Delete this entry (y/N)? "
+
+  case "$confirm" in
+    y|Y) ;;
+    *)
+      restore_terminal_for_ui
+      draw_window
+      return
+      ;;
+  esac
+
+  load_all_vault_lines || {
+    printf "\nFailed to load vault. No changes were made.\n"
+    printf "Press [enter] to return..."
+    IFS= read -r _
+    restore_terminal_for_ui
+    draw_window
+    return
+  }
+
+  backup_current_vault
+
+  removed=0
+  for ((i=0; i<${#vault_all_lines[@]}; i++)); do
+    if [ "$removed" -eq 0 ] && [ "${vault_all_lines[$i]}" = "$old_line" ]; then
+      unset 'vault_all_lines[i]'
+      removed=1
+      break
+    fi
+  done
+
+  vault_all_lines=("${vault_all_lines[@]}")
+
+  if [ "$removed" -eq 0 ]; then
+    printf "\nSelected entry was not found in vault.\n"
+    printf "Press [enter] to return..."
+    IFS= read -r _
+    restore_terminal_for_ui
+    draw_window
+    return
+  fi
+
+  if write_all_vault_lines; then
+    printf "\nEntry deleted.\n"
+  else
+    printf "\nFailed to save vault.\n"
+    printf "Press [enter] to return..."
+    IFS= read -r _
+  fi
+
+  restore_terminal_for_ui
+  refresh_after_change
+}

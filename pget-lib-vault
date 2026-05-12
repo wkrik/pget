@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+
+# ------------------------------------------------------------
+# pget-lib-vault
+# Vault file handling, backups, search, and record formatting
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# LIST VAULTS
+# Shows active vault files in ~/vault, excluding backups.
+# ------------------------------------------------------------
+load_vaults() {
+  local vault name
+
+  vaults=()
+
+  for vault in "$vpath"/*.gpg; do
+    [ -f "$vault" ] || continue
+    name=$(basename "$vault" .gpg)
+    vaults+=("$name")
+  done
+}
+
+list_vaults() {
+  local vault current
+
+  load_vaults
+
+  printf "Available vaults:\n\n"
+
+  if [ ${#vaults[@]} -eq 0 ]; then
+    printf "  No vaults found in %s\n\n" "$vpath"
+    return
+  fi
+
+  for vault in "${vaults[@]}"; do
+    current=""
+    [ "$vault" = "$vault_name" ] && current="  (active)"
+    printf "  %s%s\n" "$vault" "$current"
+  done
+
+  printf "\n"
+}
+
+# ------------------------------------------------------------
+# BACKUP PRUNING
+# Keeps only the most recent $auto_prune backups per vault
+# ------------------------------------------------------------
+prune_backups() {
+  local files
+
+  mapfile -t files < <(ls -1t "$bpath/${vault_name}-"*.gpg 2>/dev/null)
+
+  [ ${#files[@]} -le $auto_prune ] && return
+
+  for ((i=auto_prune; i<${#files[@]}; i++)); do
+    rm -f "${files[$i]}"
+  done
+}
+
+backup_current_vault() {
+  mkdir -p "$vpath" "$bpath"
+
+  if [ -f "$file" ]; then
+    cp "$file" "$bpath/${vault_name}-${dt}.gpg"
+    prune_backups
+  fi
+}
+
+# ------------------------------------------------------------
+# LOAD ALL VAULT LINES
+# Safe load: refuses to continue if GPG decrypt fails.
+# ------------------------------------------------------------
+load_all_vault_lines() {
+  local decrypted
+
+  decrypted=$(gpg -dq "$file")
+  if [ $? -ne 0 ]; then
+    printf "\nUnable to decrypt vault: %s\n" "$file"
+    printf "No changes were made.\n"
+    return 1
+  fi
+
+  mapfile -t vault_all_lines <<< "$decrypted"
+  return 0
+}
+
+# ------------------------------------------------------------
+# WRITE ALL VAULT LINES
+# Encrypts current vault_all_lines array to the active vault file.
+# ------------------------------------------------------------
+write_all_vault_lines() {
+  local tmp_file
+
+  tmp_file="$file.tmp.$$"
+
+  printf "%s\n" "${vault_all_lines[@]}" | \
+    gpg -c --cipher-algo AES256 --digest-algo SHA512 \
+      --compress-algo none -o "$tmp_file"
+
+  if [ $? -ne 0 ]; then
+    rm -f "$tmp_file"
+    return 1
+  fi
+
+  mv "$tmp_file" "$file"
+  return 0
+}
+
+# ------------------------------------------------------------
+# SEARCH ENGINE
+# Supports multiple space-separated patterns as AND terms.
+# Empty search text returns all non-comment lines.
+# ------------------------------------------------------------
+perform_search() {
+  local search_text="$1"
+  local decrypted line term
+  local -a terms matches
+  local max_empty_results=40
+  local count=0
+
+  read -r -a terms <<< "$search_text"
+
+  decrypted=$(gpg -dq "$file")
+  if [ $? -ne 0 ]; then
+    printf "\nUnable to decrypt vault: %s\n" "$file" >&2
+    printf "Check your passphrase or clear the GPG cache with: %s -x\n" "$0" >&2
+    return 1
+  fi
+
+  while IFS= read -r line; do
+    [[ "$line" =~ ^# ]] && continue
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+
+    if [ -z "$search_text" ]; then
+      matches+=("$line")
+      count=$((count + 1))
+
+      if [ "$count" -ge 40 ]; then
+        break
+      fi
+
+      continue
+    fi
+
+    for term in "${terms[@]}"; do
+      if [[ "${line,,}" != *"${term,,}"* ]]; then
+        continue 2
+      fi
+    done
+
+    matches+=("$line")
+  done <<< "$decrypted"
+
+  lines=("${matches[@]}")
+}
+
+refresh_after_change() {
+  perform_search "$pattern" || return
+  index=0
+  top=0
+  visible=0
+  draw_window
+}
+
+# ------------------------------------------------------------
+# ENTRY RECORD HELPERS
+# ------------------------------------------------------------
+make_entry_line() {
+  local title id secret comments tab
+
+  title="$1"
+  id="$2"
+  secret="$3"
+  comments="$4"
+  tab=$'\t'
+
+  printf "%s%s%s%s%s%s%s" "$title" "$tab" "$id" "$tab" "$secret" "$tab" "$comments"
+}
+
+split_entry_fields() {
+  local raw delim
+
+  raw="$1"
+  delim=$'\034'
+
+  raw="${raw//$'\t'/$delim}"
+
+  IFS="$delim" read -r "$2" "$3" "$4" "$5" <<< "$raw"
+}
+
+split_entry_line() {
+  local raw
+
+  raw="$1"
+
+  old_title=$(printf "%s\n" "$raw" | awk -F '\t' '{print $1}')
+  old_id=$(printf "%s\n" "$raw" | awk -F '\t' '{print $2}')
+  old_secret=$(printf "%s\n" "$raw" | awk -F '\t' '{print $3}')
+  old_comments=$(printf "%s\n" "$raw" | awk -F '\t' '{print $4}')
+}

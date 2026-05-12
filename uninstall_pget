@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+
+# ------------------------------------------------------------
+# uninstall_pget
+# ------------------------------------------------------------
+# This script reverses the setup performed by setup_pget.
+#
+# It removes:
+# - /usr/local/bin/pget
+# - /opt/pget and all its contents
+# - the setup_pget managed block from ~/.vimrc
+#
+# It does NOT uninstall system packages such as vim, gnupg,
+# or pwgen. Those may be used by other software.
+# 
+# IT DOES NOT REMOVE ANY VAULTS SINCE THEY CAN STILL BE 
+# ACCESSED WITH THE GPG COMMAND
+#
+# ------------------------------------------------------------
+# Copyright 2002-2026 Kirk Waingrow
+#
+# This program is free software; you can redistribute it
+# and/or # modify it under the terms of the GNU General Public
+# License # v3.0 (GPL-3.0) as published by the Free Software
+# Foundation # See: https://www.gnu.org/licenses/gpl-3.0.html
+# ------------------------------------------------------------
+
+set -u
+
+# ------------------------------------------------------------
+# GLOBAL VARIABLES
+# ------------------------------------------------------------
+SCRIPT_NAME=$(basename "$0")
+USER_HOME=${HOME:-}
+VIMRC="$USER_HOME/.vimrc"
+VIMRC_BACKUP=""
+PGET_DST="/opt/pget"
+PGET_LINK="/usr/local/bin/pget"
+
+BEGIN_MARKER='" BEGIN pget managed block'
+END_MARKER='" END pget managed block'
+
+# ------------------------------------------------------------
+# LOGGING / OUTPUT HELPERS
+# ------------------------------------------------------------
+log() {
+  printf '[INFO] %s\n' "$*"
+}
+
+warn() {
+  printf '[WARN] %s\n' "$*" >&2
+}
+
+error() {
+  printf '[ERROR] %s\n' "$*" >&2
+}
+
+die() {
+  error "$*"
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+# ------------------------------------------------------------
+# ENVIRONMENT VALIDATION
+# ------------------------------------------------------------
+require_home() {
+  [ -n "$USER_HOME" ] || die 'HOME is not set'
+  [ -d "$USER_HOME" ] || die "HOME directory does not exist: $USER_HOME"
+}
+
+# ------------------------------------------------------------
+# FILE BACKUP
+# ------------------------------------------------------------
+backup_file() {
+  local src="$1"
+  local ts
+
+  [ -f "$src" ] || return 0
+
+  ts=$(date +"%Y%m%d_%H%M%S")
+  VIMRC_BACKUP="${src}.${ts}"
+  cp -p "$src" "$VIMRC_BACKUP" || die "Failed to back up $src"
+  log "Backed up $src to $VIMRC_BACKUP"
+}
+
+# ------------------------------------------------------------
+# USER CONFIRMATION PROMPT
+# ------------------------------------------------------------
+confirm_start() {
+  clear
+  printf '\nThis script will perform the following actions:\n\n'
+  printf '  - Remove %s if it exists
+' "$PGET_LINK"
+  printf '  - Remove %s if it exists
+' "$PGET_DST"
+  printf '  - Backup ~/.vimrc if it exists\n'
+  printf '  - Remove the setup_pget Vim managed block from ~/.vimrc\n\n'
+  printf 'This script will NOT remove vim, gnupg, or pwgen. They may\n'
+  printf 'be used by other software.\n\n'
+  printf 'This script will NOT remove any vaults. Vaults can still be\n'
+  printf 'accessed with the gpg command. Recommendation: Manually\n'
+  printf "delete files in $USER_HOME/vaults if no longer needed.\n\n"
+  printf 'Press [Enter] to continue or Ctrl-C to cancel...'
+
+  IFS= read -r _
+  printf '\n'
+}
+
+# ------------------------------------------------------------
+# REMOVE PGET INSTALLATION
+# ------------------------------------------------------------
+remove_pget_installation() {
+  need_cmd sudo
+
+  if [ -e "$PGET_LINK" ] || [ -L "$PGET_LINK" ]; then
+    log "Removing $PGET_LINK"
+    sudo rm -f "$PGET_LINK" || die "Failed to remove $PGET_LINK"
+  else
+    log "$PGET_LINK not found; skipping"
+  fi
+
+  if [ -d "$PGET_DST" ]; then
+    log "Removing $PGET_DST"
+    sudo rm -rf "$PGET_DST" || die "Failed to remove $PGET_DST"
+  else
+    log "$PGET_DST not found; skipping"
+  fi
+}
+
+# ------------------------------------------------------------
+# REMOVE MANAGED VIMRC BLOCK
+# ------------------------------------------------------------
+remove_vimrc_block() {
+  local tmp_file
+
+  if [ ! -f "$VIMRC" ]; then
+    log "$VIMRC not found; skipping"
+    return 0
+  fi
+
+  if ! grep -Fq "$BEGIN_MARKER" "$VIMRC"; then
+    log "Managed block not found in $VIMRC; skipping"
+    return 0
+  fi
+
+  backup_file "$VIMRC"
+
+  tmp_file=$(mktemp) || die 'Failed to create temporary file'
+
+  awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" '
+    $0 == begin { skip=1; next }
+    $0 == end { skip=0; next }
+    skip != 1 { print }
+  ' "$VIMRC" > "$tmp_file" || {
+    rm -f "$tmp_file"
+    die "Failed to remove managed block from $VIMRC"
+  }
+
+  mv "$tmp_file" "$VIMRC" || {
+    rm -f "$tmp_file"
+    die "Failed to update $VIMRC"
+  }
+
+  log "Removed managed Vim GPG block from $VIMRC"
+}
+
+# ------------------------------------------------------------
+# USER GUIDANCE
+# ------------------------------------------------------------
+print_next_steps() {
+  cat <<EOF
+
+Uninstall complete.
+
+Notes:
+- System packages were not removed.
+- Any vault files, such as ~/etc/vault/vault.gpg, were not removed.
+- If needed, review your backup:
+  ${VIMRC_BACKUP:-No .vimrc backup was created}
+
+EOF
+}
+
+# ------------------------------------------------------------
+# MAIN EXECUTION FLOW
+# ------------------------------------------------------------
+main() {
+  require_home
+  need_cmd date
+  need_cmd cp
+  need_cmd grep
+  need_cmd awk
+  need_cmd mktemp
+  need_cmd rm
+  need_cmd mv
+
+  confirm_start
+
+  remove_pget_installation
+  remove_vimrc_block
+
+  log 'Uninstall completed successfully'
+  print_next_steps
+}
+
+clear
+main "$@"
+
+

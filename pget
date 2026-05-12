@@ -1,0 +1,465 @@
+#!/usr/bin/env bash
+
+# ------------------------------------------------------------
+# pget - lightweight, Linux, terminal-based password manager 
+# that stores secrets in encrypted vault files using AES256, 
+# giving users full control over their data and security.
+#
+# Copyright (C) 2026 Kirk Waingrow 
+#
+# This program is free software: you can redistribute it 
+# and/or modify it under the terms of the GNU General Public 
+# License as published by # the Free Software Foundation, 
+# either version 3 of the License, or (at your option) any
+# later version.
+#
+# This program is distributed in the hope that it will be 
+# useful, but WITHOUT ANY WARRANTY; without even the implied 
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
+# PURPOSE.  See the GNU General Public License for more 
+# details.
+#
+# Copy of the GNU General Public License is provided along 
+# with this program.  If not, see: 
+# https://www.gnu.org/licenses/.
+#
+# ------------------------------------------------------------
+VERSION=v2.138
+
+# ---- Paths and file setup ----
+#
+vpath="$HOME/vault"
+bpath="$vpath/backups"
+vault_name="Primary"
+file=""
+auto_prune=10
+dt=$(date +"%y%m%d_%H%M%S")
+
+# ---- Library path ----
+# Changing is not advisable
+#
+PGET_LIB_DIR="${PGET_LIB_DIR:-/opt/pget}"
+
+# ---- Password generator ----
+#
+#PWGEN="pwgen -s 15 1"
+#PWGEN="openssl rand -base64 15"
+PWGEN="head -c 15 /dev/urandom | base64"
+
+# ---- GPG cache handling ----
+#
+AUTO_KILL_GPG_AGENT=0
+
+# ---- Display configuration ----
+#
+max_total=80
+win_size=20
+msg_row=0
+
+# ---- Color Theme ----
+#
+HIGHLIGHT_ON=$(tput setab 236 2>/dev/null || printf '\033[48;5;236m')
+HIGHLIGHT_OFF=$(tput sgr0 2>/dev/null || printf '\033[0m')
+VISABLE_BG=$(tput setab 88 2>/dev/null || printf '\033[48;5;88m')
+HIGHLIGHT_FG=$(tput setaf 7 2>/dev/null || printf '\033[47m')
+PATTERN_FONT_FG=$(tput setaf 6 2>/dev/null || printf '\033[36m')
+COPIED_BG=$(tput setab 2 2>/dev/null || printf '\033[42m')
+VAULT_FG=$(tput setaf 208 2>/dev/null || printf '\033[208m')
+
+# -------------- Do Not Change Below this line  --------------
+
+# ---- Load libraries ----
+#
+. "$PGET_LIB_DIR/pget-lib-gpg"
+. "$PGET_LIB_DIR/pget-lib-readline"
+. "$PGET_LIB_DIR/pget-lib-clipboard"
+. "$PGET_LIB_DIR/pget-lib-vault"
+. "$PGET_LIB_DIR/pget-lib-entry"
+. "$PGET_LIB_DIR/pget-lib-ui"
+
+pget_gpg_init
+
+# ------------------------------------------------------------
+# REQUIRE vim-gnupg
+# ------------------------------------------------------------
+check_vim_gnupg() {
+  local vimrc="$HOME/.vimrc"
+  local runtime_path plugin_path
+
+  if [ ! -f "$vimrc" ]; then
+    printf "\npget cannot run: ~/.vimrc not found.\n"
+    printf "Run setup_pget to configure Vim and vim-gnupg.\n\n"
+    exit 1
+  fi
+
+  runtime_path=$(grep -E "runtimepath\+=.*vim-gnupg" "$vimrc" 2>/dev/null | head -n1)
+
+  if [ -z "$runtime_path" ]; then
+    printf "\npget cannot run: vim-gnupg not configured in ~/.vimrc.\n"
+    printf "Expected a runtimepath entry like:\n"
+    printf "  set runtimepath+=~/opt/pget/plugin/vim-gnupg\n\n"
+    printf "Run setup_pget to configure Vim securely.\n\n"
+    exit 1
+  fi
+
+  plugin_path=${runtime_path#*+=}
+  #plugin_path=${plugin_path/#\~/$HOME}
+  plugin_path="$plugin_path/plugin/gnupg.vim"
+
+  if [ ! -f "$plugin_path" ]; then
+    printf "\npget cannot run: vim-gnupg plugin not found.\n"
+    printf "Checked: %s\n" "$plugin_path"
+    printf "\nRun setup_pget to install required components.\n\n"
+    exit 1
+  fi
+}
+
+check_vim_gnupg
+
+# ------------------------------------------------------------
+# FIRST RUN: CREATE DEFAULT VAULT IF MISSING
+# ------------------------------------------------------------
+default_file="$vpath/${vault_name}.gpg"
+
+if [ ! -f "$default_file" ]; then
+  printf "\nThis is the first time running $0.\n\n"
+  printf "Lets create an encrypted vault called: ${vault_name}\n\n"
+  printf "You will need to enter a master password for this vault.\n"
+  printf "Every vault you create can have a unique master password.\n"
+  printf "You will need this master password anytime you run pget,\n"
+  printf "add, modify, or remove an entry.\n\n"
+  printf "Lose the master password and access to data is lost.\n"
+  printf "Master passwords are not recoverable.\n\n"
+  printf "Vault location: %s\n\n" "$vpath"
+  printf "A Backup is created on each write of the vault.\n"
+  printf "Backup location: %s\n\n" "$bpath"
+  printf "Hit [enter] to get started."
+
+  IFS= read -r _
+
+  mkdir -p "$vpath" "$bpath"
+
+  vault_all_lines=()
+  vault_all_lines+=("# Title [tab] ID [tab] password [tab] Comments")
+  vault_all_lines+=($'Sample\tjohndoe@sample123.com\tPeaG3tis#1atlnx!\tSample Entry | Subscription Expires 12/26 | https://sample123.com')
+
+  tmp_file="$default_file.tmp.$$"
+
+  printf "%s\n" "${vault_all_lines[@]}" | pget_gpg_encrypt "$tmp_file"
+
+  if [ $? -ne 0 ]; then
+    rm -f "$tmp_file"
+    printf "\nFailed to create vault.\n"
+    exit 1
+  fi
+
+  mv "$tmp_file" "$default_file"
+
+  tput cnorm 2>/dev/null
+  stty echo icanon 2>/dev/null
+
+  printf "\nCreate your first entry\n\n"
+
+  while :; do
+    read_prompt title "Title: "
+    [ -n "$title" ] || [ "$title" = ".clear" ] && break
+    printf "Title is required.\n"
+  done
+
+  read_prompt id "ID: "
+
+  while :; do
+    read_prompt secret "Secret [g=generate]: "
+    printf "\n"
+
+    case "$secret" in
+      g|G)
+        pwgen_cmd="${PWGEN%% *}"
+
+        if ! command -v "$pwgen_cmd" >/dev/null 2>&1; then
+          printf "Password generator not found: %s\n" "$pwgen_cmd"
+          continue
+        fi
+
+        while :; do
+          generated=$(eval "$PWGEN")
+          printf "Generated password: %s\n" "$generated"
+          read_prompt answer "Use this password (Y/n/g)? "
+
+          case "$answer" in
+            ""|y|Y)
+              secret="$generated"
+              break 2
+              ;;
+            g|G)
+              printf "\n"
+              continue
+              ;;
+            n|N)
+              printf "\n"
+              break
+              ;;
+            *)
+              printf "Enter y to use, n for manual entry, or g to regenerate.\n"
+              ;;
+          esac
+        done
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  read_prompt comments "Comments: "
+
+  first_line=$(make_entry_line "$title" "$id" "$secret" "$comments")
+  vault_all_lines+=("$first_line")
+
+  tmp_file="$default_file.tmp.$$"
+
+  printf "%s\n" "${vault_all_lines[@]}" | pget_gpg_encrypt "$tmp_file"
+
+  if [ $? -ne 0 ]; then
+    rm -f "$tmp_file"
+    printf "\nFailed to save first entry.\n"
+    exit 1
+  fi
+
+  mv "$tmp_file" "$default_file"
+
+  exec "$0" "$title"
+fi
+
+# ------------------------------------------------------------
+# OPTION PARSING
+# ------------------------------------------------------------
+if [ "$1" = "-v" ]; then
+  shift
+
+  if [ -z "$1" ]; then
+    printf "Error: -v requires a vault name.\n\n"
+    printf "Usage: $0 [-v vault_name] [-E | -l | -x | --help] pattern\n\n"
+    exit 1
+  fi
+
+  vault_name="$1"
+  shift
+fi
+
+file="$vpath/${vault_name}.gpg"
+
+if [ "$1" = "-l" ]; then
+  list_vaults
+  exit 0
+fi
+
+if [ "$1" = "-x" ]; then
+  kill_gpg_agent
+  printf "Cache cleared (all vaults).\n"
+  exit 0
+fi
+
+if [ "$1" = "-E" ]; then
+  backup_current_vault
+  vim "$file"
+  exit $?
+fi
+
+if [ "$1" = "--help" ]; then
+  show_help --help 
+  exit 0
+fi
+
+if [ "$1" = "--version" ]; then
+  echo "$VERSION"
+  exit 0
+fi
+
+if [ -z "$1" ]; then
+  printf "Usage: $0 [-v vault_name] [-E | -l | -x | --help] pattern\n\n"
+  exit 1
+fi
+
+pattern="$1"
+
+# ------------------------------------------------------------
+# INITIAL SEARCH
+# ------------------------------------------------------------
+if ! perform_search "$pattern"; then
+  exit 1
+fi
+
+if [ ${#lines[@]} -eq 0 ]; then
+  printf "No matches found.\n"
+  printf "Use '/' to try another search pattern\n"
+  printf "Use 'a' in interactive mode to add an entry.\n"
+fi
+
+# ------------------------------------------------------------
+# STATE VARIABLES
+# ------------------------------------------------------------
+index=0
+visible=0
+top=0
+
+# ------------------------------------------------------------
+# INITIAL TERMINAL SETUP
+# ------------------------------------------------------------
+trap cleanup EXIT
+trap 'update_display_size; draw_window' WINCH
+trap handle_sigint INT
+
+update_display_size
+
+tput smcup
+tput civis
+stty -echo -icanon time 0 min 1
+
+draw_window
+
+# ------------------------------------------------------------
+# MAIN INPUT LOOP
+# ------------------------------------------------------------
+while IFS= read -r -s -n1 key; do
+  case "$key" in
+
+    $'\033')
+      IFS= read -r -s -n1 k1 || true
+      [[ "$k1" == "[" ]] && {
+        IFS= read -r -s -n1 k2 || true
+        case "$k2" in
+          A) jump_to_index $((index - 1)) ;;
+          B) jump_to_index $((index + 1)) ;;
+          H) jump_to_index 0 ;;
+          F) jump_to_index $((${#lines[@]} - 1)) ;;
+          5) read -rsn1 _ && page_up ;;
+          6) read -rsn1 _ && page_down ;;
+        esac
+      }
+      ;;
+
+    j) jump_to_index $((index + 1)) ;;
+    k) jump_to_index $((index - 1)) ;;
+
+    s|h)
+      visible=$((1 - visible))
+      redraw_current_line
+      ;;
+
+    a) add_entry ;;
+    e|m) modify_entry ;;
+    d) delete_entry ;;
+    g) password_generator ;;
+    w) 
+      show_license
+      ;;
+    x)
+      kill_gpg_agent
+      tput cup "$msg_row" 0
+      tput el
+      printf "%s" "${COPIED_BG}${HIGHLIGHT_FG} Cache cleared ${HIGHLIGHT_OFF} (all vaults). Exiting..."
+      sleep 3
+      break
+      ;;
+
+    E)
+      tput cnorm
+      stty echo icanon 2>/dev/null
+      clear
+      printf "\n"
+      printf " +---------------------------------------------------------------+\n"
+      printf " |                          WARNING                              |\n"
+      printf " +---------------------------------------------------------------+\n"
+      printf " |                                                               |\n"
+      printf " |  You are about to edit encrypted vault data directly in Vim.  |\n"
+      printf " |                                                               |\n"
+      printf " |                YOUR SECRETS WILL BE VISIBLE                   |\n"
+      printf " |                                                               |\n"
+      printf " |  The RISKS are:                                               |\n"
+      printf " |                                                               |\n"
+      printf " |   * screen capture or shoulder surfing                        |\n"
+      printf " |   * compromised local systems                                 |\n"
+      printf " |   + system crashes                                            |\n"
+      printf " |   + memory inspection                                         |\n"
+      printf " |   + swap/page activity outside Vim                            |\n"
+      printf " |                                                               |\n"
+      printf " |  Only continue if you understand and accept these risks!      |\n"
+      printf " |                                                               |\n"
+      printf " +---------------------------------------------------------------+\n\n"
+      printf "Continue editing encrypted vault (y/N)? "
+      IFS= read_edit confirm
+      stty -echo -icanon time 0 min 1
+      tput civis
+
+      case "$confirm" in
+        y|Y)
+          backup_current_vault
+          vim "$file"
+          refresh_after_change
+          ;;
+        *)
+          draw_window
+          ;;
+      esac
+      ;;
+
+    c|y)
+      [ ${#lines[@]} -eq 0 ] && continue
+      split_entry_fields "${lines[$index]}" field1 field2 field3 field4
+      secret="$field3"
+      secret=${secret%$'\r'}
+      [ -z "$secret" ] && secret="${lines[$index]}"
+      copy_to_clipboard "$secret"
+      tput cup "$msg_row" 0
+      tput el
+      printf "%s" "${COPIED_BG}${HIGHLIGHT_FG}Copied${HIGHLIGHT_OFF}"
+      ;;
+
+    /) prompt_search ;;
+    v) select_vault ;;
+    \?) show_help ;;
+
+    ''|l)
+      [ ${#lines[@]} -eq 0 ] && continue
+      popup_show=0
+      draw_popup
+
+      while IFS= read -r -s -n1 popup_key; do
+        case "$popup_key" in
+          s|h)
+            popup_show=$((1 - popup_show))
+            draw_popup
+            ;;
+          q)
+            cleanup
+            exit 0
+            ;;
+          c|y)
+            split_entry_fields "${lines[$index]}" field1 field2 field3 field4
+            secret="$field3"
+            secret=${secret%$'\r'}
+            [ -z "$secret" ] && secret="${lines[$index]}"
+            copy_to_clipboard "$secret"
+            tput cup "$msg_row" 0
+            tput el
+            printf "%s" "${COPIED_BG}${HIGHLIGHT_FG}Copied${HIGHLIGHT_OFF}"
+            ;;
+          ''|l)
+            clear
+            draw_window
+            break
+            ;;
+        esac
+      done
+      ;;
+
+    q) break ;;
+  esac
+done
+
+cleanup
+trap - EXIT
+clear
+echo
+echo "Done."

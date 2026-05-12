@@ -1,0 +1,523 @@
+#!/usr/bin/env bash
+
+# ------------------------------------------------------------
+# setup_pget
+# ------------------------------------------------------------
+# This script installs and configures Vim + vim-gnupg so that
+# .gpg files are edited securely using AES256 symmetric
+# encryption (no keypair required). Cross-platform
+# Debian + Fedora like Linux flavors.
+#
+# When the script is run, it provide information on what will
+# be installed and configured before anything is performed.
+#
+# ------------------------------------------------------------
+# Copyright 2002-2026 Kirk Waingrow
+#
+# This program is free software; you can redistribute it
+# and/or # modify it under the terms of the GNU General Public
+# License # v3.0 (GPL-3.0) as published by the Free Software
+# Foundation # See: https://www.gnu.org/licenses/gpl-3.0.html
+# ------------------------------------------------------------
+
+set -u   # Treat unset variables as errors (defensive scripting)
+
+# ------------------------------------------------------------
+# GLOBAL VARIABLES
+# ------------------------------------------------------------
+# Centralized paths and runtime values used throughout script
+# ------------------------------------------------------------
+SCRIPT_NAME=$(basename "$0")
+USER_HOME=${HOME:-}
+VIMRC="$USER_HOME/.vimrc"
+VIMRC_BACKUP=""
+FORCE_OS=""
+PGET_DST="/opt/pget"
+PGET_LINK="/usr/local/bin/pget"
+
+# ------------------------------------------------------------
+# LOGGING / OUTPUT HELPERS
+# ------------------------------------------------------------
+# Simple wrappers to standardize output and readability
+# ------------------------------------------------------------
+log() {
+  printf '[INFO] %s\n' "$*"
+}
+
+warn() {
+  printf '[WARN] %s\n' "$*" >&2
+}
+
+error() {
+  printf '[ERROR] %b\n' "$*" >&2
+}
+
+# Fatal error handler
+# Stops execution immediately
+# ------------------------------------------------------------
+die() {
+  error "$*"
+  exit 1
+}
+
+# ------------------------------------------------------------
+# VALIDATION HELPERS
+# ------------------------------------------------------------
+# Ensures required commands exist before continuing
+# ------------------------------------------------------------
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+# ------------------------------------------------------------
+# USAGE / ARGUMENT PARSING
+# ------------------------------------------------------------
+# Supports forcing the OS when automatic detection fails
+# ------------------------------------------------------------
+usage() {
+  cat <<EOF
+Usage: $SCRIPT_NAME [-f debian|fedora]
+
+Options:
+  -f OS    Force OS mode. Valid values: debian, fedora
+  -h       Show this help
+
+Examples:
+  $SCRIPT_NAME
+  $SCRIPT_NAME -f debian
+  $SCRIPT_NAME -f fedora
+EOF
+}
+
+parse_args() {
+  while getopts ":f:h" opt; do
+    case "$opt" in
+      f)
+        case "$OPTARG" in
+          debian|fedora)
+            FORCE_OS="$OPTARG"
+            ;;
+          *)
+            die "Invalid force OS: $OPTARG. Use: -f debian or -f fedora"
+            ;;
+        esac
+        ;;
+      h)
+        usage
+        exit 0
+        ;;
+      \?)
+        die "Unknown option: -$OPTARG"
+        ;;
+      :)
+        die "Option -$OPTARG requires an argument"
+        ;;
+    esac
+  done
+}
+
+# ------------------------------------------------------------
+# PGET SOURCE DIRECTORY
+# ------------------------------------------------------------
+# Finds the pget source tree from inside the setup directory
+# ------------------------------------------------------------
+get_pget_source_dir() {
+  local parent=""
+
+  parent=$(cd .. 2>/dev/null && pwd) || die 'Failed to move one level up from setup directory'
+
+  if [ -d "$parent/pget" ] && [ -x "$parent/pget/pget" ]; then
+    printf '%s\n' "$parent/pget"
+  else
+    die 'Could not find pget directory tree one level up'
+  fi
+}
+
+# ------------------------------------------------------------
+# PREVIOUS INSTALL VALIDATION
+# ------------------------------------------------------------
+# Compares existing installed pget version to source version.
+# Same version may be overwritten. Different version must be
+# moved out of the way before setup continues.
+# ------------------------------------------------------------
+validate_existing_pget_install() {
+  local src=""
+  local installed_version=""
+  local source_version=""
+
+  need_cmd readlink
+
+  src=$(get_pget_source_dir)
+
+  if [ -e "$PGET_LINK" ]; then
+    if [ ! -L "$PGET_LINK" ]; then
+      die "$PGET_LINK exists but is not a symlink to $PGET_DST/pget.\nThis is not part of a standard pget install and could indicate tampering.\nCorrect this before proceeding.\n"
+
+    fi
+
+    if [ "$(readlink "$PGET_LINK")" != "$PGET_DST/pget" ]; then
+      die "$PGET_LINK is a symlink, but not to $PGET_DST/pget.\nThis is not part of a standard pget install and could indicate tampering.\nCorrect this before proceeding.\n"
+    fi
+  fi
+
+  if [ -x "$PGET_DST/pget" ]; then
+    installed_version=$("$PGET_DST/pget" --version 2>/dev/null | head -n 1)
+    source_version=$("$src/pget" --version 2>/dev/null | head -n 1)
+
+    [ -n "$installed_version" ] || installed_version="unknown"
+    [ -n "$source_version" ] || source_version="unknown"
+
+    if [ "$installed_version" = "$source_version" ]; then
+      log "Existing pget version matches source version: $installed_version"
+      log 'Existing /opt/pget may be overwritten'
+      return 0
+    fi
+
+    cat <<EOF
+
+Another pget installation already exists in /opt/pget.
+
+Installed version:
+  $installed_version
+
+New version:
+  $source_version
+
+Move the existing installation out of the way with:
+
+  sudo mv /opt/pget /opt/pget-$installed_version
+
+Then run setup_pget again.
+
+No vault data will be lost.
+EOF
+    exit 1
+  fi
+}
+
+# ------------------------------------------------------------
+# FILE BACKUP
+# ------------------------------------------------------------
+# Creates timestamped backup of a file before modification
+# ------------------------------------------------------------
+backup_file() {
+  local src="$1"
+  local ts
+
+  [ -f "$src" ] || return 0
+
+  ts=$(date +"%Y%m%d_%H%M%S")
+  VIMRC_BACKUP="${src}.${ts}"
+  cp -p "$src" "$VIMRC_BACKUP" || die "Failed to back up $src"
+  log "Backed up $src to $VIMRC_BACKUP"
+}
+
+# ------------------------------------------------------------
+# SAFE APPEND (LINE)
+# ------------------------------------------------------------
+# Adds a line only if it does not already exist
+# Prevents duplicate config entries
+# ------------------------------------------------------------
+append_if_missing() {
+  local file="$1"
+  local line="$2"
+
+  grep -Fqx "$line" "$file" 2>/dev/null && return 0
+  printf '%s\n' "$line" >> "$file" || die "Failed writing to $file"
+}
+
+# ------------------------------------------------------------
+# SAFE APPEND (BLOCK)
+# ------------------------------------------------------------
+# Adds a full configuration block to .vimrc only once
+# Uses markers so it does not duplicate on re-run
+# ------------------------------------------------------------
+append_block_if_missing() {
+  local file="$1"
+
+  grep -Fq 'BEGIN pget managed block' "$file" 2>/dev/null && {
+    log "Managed Vim GPG block already present in $file"
+    return 0
+  }
+
+  {
+    printf '\n'
+    printf '" BEGIN pget managed block\n'
+    printf 'set runtimepath+=/opt/pget/plugin/vim-gnupg\n'
+    printf '\n'
+
+    # Disable ALL plaintext artifacts
+    printf 'set nobackup\n'
+    printf 'set nowritebackup\n'
+    printf 'set noswapfile\n'
+    printf 'set noundofile\n'
+    printf 'set viminfo=\n'
+    printf '\n'
+
+    # Force strong symmetric encryption
+    printf 'let g:GPGPreferSymmetric = 1\n'
+    printf "let g:GPGCipher = 'AES256'\n"
+    printf 'let g:GPGQuiet = 1\n'
+
+    printf '" END pget managed block\n'
+  } >> "$file" || die "Failed appending managed block to $file"
+
+  log "Added managed Vim GPG configuration block to $file"
+}
+
+# ------------------------------------------------------------
+# ENVIRONMENT VALIDATION
+# ------------------------------------------------------------
+# Ensures HOME exists and is usable
+# ------------------------------------------------------------
+require_home() {
+  [ -n "$USER_HOME" ] || die 'HOME is not set'
+  [ -d "$USER_HOME" ] || die "HOME directory does not exist: $USER_HOME"
+}
+
+# ------------------------------------------------------------
+# OS DETECTION
+# ------------------------------------------------------------
+# Reads /etc/os-release to determine distribution
+# ------------------------------------------------------------
+get_os_id() {
+  local os_id
+
+  if [ -n "$FORCE_OS" ]; then
+    os_id="$FORCE_OS"
+  else
+    if [ ! -r /etc/os-release ]; then
+      error 'OS cannot be verified: /etc/os-release not found'
+      error 'Run again with -f debian or -f fedora to force OS mode'
+      exit 1
+    fi
+
+    os_id=$(awk -F= '/^ID=/{gsub(/"/, "", $2); print $2}' /etc/os-release)
+  fi
+
+  # Normalize the OS value before using it.
+  # This removes spaces, tabs, carriage returns, and newlines.
+  os_id=$(printf '%s' "$os_id" | tr -d '[:space:]')
+
+  if [ -z "$os_id" ]; then
+    error 'OS cannot be verified: empty OS ID'
+    error 'Run again with -f debian or -f fedora to force OS mode'
+    exit 1
+  fi
+
+  case "$os_id" in
+    debian|ubuntu|linuxmint|pop|fedora|kali)
+      printf '%s\n' "$os_id"
+      ;;
+    *)
+      error "OS cannot be verified or is unsupported: $os_id"
+      error 'Run again with -f debian or -f fedora to force OS mode'
+      exit 1
+      ;;
+  esac
+}
+
+# ------------------------------------------------------------
+# PACKAGE INSTALLATION
+# ------------------------------------------------------------
+# Installs required tools depending on OS
+# ------------------------------------------------------------
+install_packages() {
+  local os_id="$1"
+
+  case "$os_id" in
+    debian|ubuntu|linuxmint|pop|kali)
+      need_cmd sudo
+      log 'Installing packages with apt'
+      sudo apt update || die 'apt update failed'
+      sudo apt install vim vim-runtime gnupg pwgen || die 'apt install failed'
+      ;;
+    fedora)
+      need_cmd sudo
+      log 'Installing packages with dnf'
+      sudo dnf install vim vim-enhanced gnupg pwgen || die 'dnf install failed'
+      ;;
+    *)
+      error "Unsupported OS ID: $os_id"
+      error "This OS is not supported automatically."
+      error "If your flavor of Linux is based on debian or fedora"
+      error "you can try forcing the install with:"
+      error "  $SCRIPT_NAME -f debian"
+      error "  $SCRIPT_NAME -f fedora"
+      exit 1
+      ;;
+  esac
+}
+
+# ------------------------------------------------------------
+# VIM VALIDATION
+# ------------------------------------------------------------
+# Confirms actual Vim (not Neovim) is being used
+# ------------------------------------------------------------
+show_vim_version() {
+  log 'vim --version | head -n 2'
+  vim --version | head -n 2
+}
+
+vim_is_nvim() {
+  vim --version 2>/dev/null | head -n 1 | grep -qi 'NVIM'
+}
+
+# ------------------------------------------------------------
+# DEBIAN: FIX VIM ALTERNATIVES
+# ------------------------------------------------------------
+# Forces vim -> vim.basic instead of nvim
+# ------------------------------------------------------------
+configure_debian_vim_alternative() {
+  need_cmd sudo
+  need_cmd update-alternatives
+
+  [ -x /usr/bin/vim.basic ] || die '/usr/bin/vim.basic not found'
+
+  log 'Fixing vim alternative to use real Vim'
+  sudo update-alternatives --install /usr/bin/vim vim /usr/bin/vim.basic 100
+  sudo update-alternatives --set vim /usr/bin/vim.basic
+}
+
+# Wrapper so this only runs on Debian-based systems
+ensure_real_vim_on_debian_if_needed() {
+  local os_id="$1"
+
+  case "$os_id" in
+    debian|ubuntu|linuxmint|pop)
+      if vim_is_nvim; then
+        warn 'vim resolves to Neovim; fixing'
+        configure_debian_vim_alternative
+      fi
+      ;;
+  esac
+}
+
+# ------------------------------------------------------------
+# VIM CONFIGURATION
+# ------------------------------------------------------------
+# Ensures .vimrc exists and inserts secure config block
+# ------------------------------------------------------------
+ensure_vimrc() {
+  [ -f "$VIMRC" ] || : > "$VIMRC"
+
+  backup_file "$VIMRC"
+  append_block_if_missing "$VIMRC"
+}
+
+# ------------------------------------------------------------
+# FINAL VALIDATION
+# ------------------------------------------------------------
+verify_vim_looks_correct() {
+  local first_line
+  first_line=$(vim --version | head -n 1)
+
+  printf '%s\n' "$first_line" | grep -q 'VIM - Vi IMproved' || die 'Not real Vim'
+}
+
+# ------------------------------------------------------------
+# INSTALL PGET
+# ------------------------------------------------------------
+# Installs the pget directory tree into /opt using sudo
+# ------------------------------------------------------------
+install_pget() {
+  local src=""
+  need_cmd sudo
+
+  src=$(get_pget_source_dir)
+
+  log "Installing $src to /opt/pget"
+
+  sudo mkdir -p /opt || die 'Failed to create /opt'
+  sudo cp -r "$src" /opt || die 'Failed to copy pget to /opt'
+  sudo chown -R root:root "$PGET_DST" || die 'Failed to set ownership on /opt/pget'
+
+  sudo ln -sfn "$PGET_DST/pget" "$PGET_LINK" || die 'Failed to create pget symlink'
+  log "Created symlink: $PGET_LINK -> $PGET_DST/pget"
+}
+
+# ------------------------------------------------------------
+# USER GUIDANCE
+# ------------------------------------------------------------
+# Prints final manual test instructions
+# ------------------------------------------------------------
+print_next_steps() {
+  cat <<'EOF'
+
+Setup complete.
+
+Test:
+  vim test.gpg
+  :wq
+
+You should be prompted for a passphrase.
+
+Verify AES256 encryption, and the file can be decrypted:
+  gpg --list-packets test.gpg 2>&1 | grep 'encrypted data'
+  gpg -d test.gpg
+
+EOF
+}
+
+# ------------------------------------------------------------
+# USER CONFIRMATION PROMPT
+# ------------------------------------------------------------
+# Shows what will be installed and pauses before continuing
+# ------------------------------------------------------------
+confirm_start() {
+  local os_id="$1"
+
+  printf "\nThis script will perform the following actions:\n\n"
+
+  case "$os_id" in
+    debian|ubuntu|linuxmint|pop|kali)
+      printf "  - Install packages: vim, vim-runtime, gnupg, pwgen (via apt)\n"
+      ;;
+    fedora)
+      printf "  - Install packages: vim, vim-enhanced, gnupg, pwgen (via dnf)\n"
+      ;;
+  esac
+
+  printf "  - Ensure Vim is real Vim (not Neovim, Debian only)\n"
+  printf "  - Use vim-gnupg from the pget plugin directory\n"
+  printf "  - Backup and update ~/.vimrc with secure settings\n"
+  printf "  - Install the pget directory tree into /opt (via sudo)\n"
+  printf "  - Install /usr/local/bin/pget symlink (via sudo)\n\n"
+  printf "\nPress [Enter] to continue or Ctrl-C to cancel..."
+
+  # wait for user
+  IFS= read -r _
+  printf "\n"
+}
+
+# ------------------------------------------------------------
+# MAIN EXECUTION FLOW
+# ------------------------------------------------------------
+main() {
+  local os_id
+
+  require_home
+  parse_args "$@"
+  validate_existing_pget_install
+
+  os_id=$(get_os_id)
+  log "Detected OS: $os_id"
+
+  confirm_start "$os_id"
+
+  install_packages "$os_id"
+
+  ensure_real_vim_on_debian_if_needed "$os_id"
+
+  show_vim_version
+
+  verify_vim_looks_correct
+  ensure_vimrc
+  install_pget
+
+  log 'Setup completed successfully'
+  print_next_steps
+}
+
+main "$@"
+

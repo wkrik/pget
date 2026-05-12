@@ -1,0 +1,637 @@
+#!/usr/bin/env bash
+
+# ------------------------------------------------------------
+# pget-lib-ui
+# Terminal UI, drawing, navigation, vault selector, and cleanup
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# CLEANUP
+# Restores terminal state and optionally clears GPG cache.
+# ------------------------------------------------------------
+cleanup() {
+  pget_gpg_maybe_kill_agent
+
+  tput cnorm 2>/dev/null
+  tput rmcup 2>/dev/null
+  stty echo icanon 2>/dev/null
+}
+
+
+
+# ------------------------------------------------------------
+# HEADER / STATUS
+# ------------------------------------------------------------
+draw_header() {
+  tput cup 0 0
+  #printf "pget Password Manager - Vault: %s" "$vault_name"
+  printf "pget Password Manager - Vault: %s%s%s" "$VAULT_FG" "$vault_name" "$HIGHLIGHT_OFF"
+  tput el
+}
+
+draw_status() {
+  local state line current total
+
+  if (( visible )); then
+    state="${VISABLE_BG}${HIGHLIGHT_FG}VISIBLE${HIGHLIGHT_OFF}"
+  else
+    state="hidden "
+  fi
+
+  total=${#lines[@]}
+  if [ "$total" -eq 0 ]; then
+    current=0
+  else
+    current=$((index + 1))
+  fi
+
+  tput cup 1 0
+  line=$(printf "? = help | %d of %d | %s | pattern: " "$current" "$total" "$state")
+  printf "%s%s%s%s" "$line" "$PATTERN_FONT_FG" "$pattern" "$HIGHLIGHT_OFF"
+  tput el
+}
+
+# ------------------------------------------------------------
+# DRAW SINGLE LINE
+# ------------------------------------------------------------
+draw_line() {
+  local screen_row="$1"
+  local data_index="$2"
+  local field1 field2 field3 field4 mid out line_text
+  local marker avail
+
+  tput cup "$screen_row" 0
+  tput el
+
+  (( data_index < 0 || data_index >= ${#lines[@]} )) && return
+
+  split_entry_fields "${lines[$data_index]}" field1 field2 field3 field4
+
+  if (( data_index == index && visible )); then
+    mid="$field3"
+  else
+    printf -v mid '%*s' "${#field3}" ''
+    mid=${mid// /'*'}
+  fi
+
+  line_text="$field1"
+  [ -n "$field2" ] && line_text+=" | $field2"
+  [ -n "$field3" ] && line_text+=" | $mid"
+  [ -n "$field4" ] && line_text+=" | $field4"
+
+  (( data_index == index )) && marker="> " || marker="  "
+
+  avail=$((max_total - ${#marker}))
+  (( ${#line_text} > avail )) && out="$(printf "%.*s" "$((avail - 3))" "$line_text")..." || out="$line_text"
+
+  if (( data_index == index )); then
+    printf "%s%s%s%s" "$HIGHLIGHT_ON" "$marker" "$out" "$HIGHLIGHT_OFF"
+  else
+    printf "%s%s" "$marker" "$out"
+  fi
+
+  tput el
+}
+
+
+# ------------------------------------------------------------
+# DRAW MAIN WINDOW
+# ------------------------------------------------------------
+draw_window() {
+  tput cup 0 0
+  tput ed
+
+  draw_header
+  draw_status
+
+  if [ ${#lines[@]} -eq 0 ]; then
+    tput cup 3 0
+    printf "No matches found.\n"
+    printf "Use '/' to try another search pattern\n"
+    printf "Use 'a' in interactive mode to add an entry.\n"
+    return
+  fi
+
+  for ((row=0; row<win_size; row++)); do
+    draw_line $((row + 3)) "$((top + row))"
+  done
+  
+}
+
+# ------------------------------------------------------------
+# HELP SCREEN
+# ------------------------------------------------------------
+show_help() {
+  clear
+  tput cup 0 0
+
+  draw_header
+  printf "\n\n"
+  printf "CLI Usage: pget [-v vault_name] [-e | -l | -x | --help] pattern\n"
+  printf "              -v   Select vault, example: -v personal\n"
+  printf "              -E   Edit encrypted file\n"
+  printf "              -l   List available vaults\n"
+  printf "              -x   Kill gpg-agent cache for all vaults\n"
+  printf "          --help   Display this help\n"
+  printf "       --version   pget version\n"
+  printf "         pattern   Pattern to search, use \" \" for multiple patterns\n\n"
+
+  printf " Navigation                                Action\n"
+  printf " ------------------------------------+-----------------------------------\n"
+  printf "  Up/Dn or j,k Move up / down        |  a   Add entry\n"
+  printf "  PgUp, PgDn   Page up / down        |  e   Edit/Modify selected entry\n"
+  printf "  Home, End    Jump to top / bottom  |  d   Delete selected entry\n"
+  printf "  l, Enter     Look/View full entry  |  c,y Copy/yank secret to clipboard\n"
+  printf "  h,s          hide/show SECRET      |  v   Create/Select other vaults\n"
+  printf "                                     | \n"
+  printf "  /            Search new pattern(s) |  E   Edit Encrypted file\n"
+  printf "                                     | \n"
+  printf "  ?            Display this help     |  g   pwgen - password generator\n"
+  printf "  x            Kill gpg-agent / exit | \n"
+  printf "  q            Quit                  |  w   Warranty & License Details\n"
+  printf " ------------------------------------+---------------------------------\n"
+  printf 'pget (C) 2026. This is free software with ABSOLUTELY NO WARRANTY.\n\n'
+
+  if [ "$1" != "--help" ]; then
+    printf "Press any key to return..."
+    while IFS= read -r -s -n1 _; do break; done
+    draw_window
+  fi
+}
+
+# ------------------------------------------------------------
+# SHOW THE LICENSE DETAILS
+# ------------------------------------------------------------
+show_license() {
+  local file="${PGET_LIB_DIR}/LICENSE"
+
+  restore_terminal_for_ui
+
+  if command -v less >/dev/null 2>&1; then
+    less -R "$file"
+  else
+    clear
+    cat "$file"
+    printf "\nPress ENTER to return..."
+    read -r _
+  fi
+
+  tput smcup
+  draw_window
+}
+
+# ------------------------------------------------------------
+# PROMPT FOR NEW SEARCH
+# ------------------------------------------------------------
+prompt_search() {
+  local new_pattern
+
+  tput cnorm
+  stty echo icanon 2>/dev/null
+
+  tput cup "$msg_row" 0
+  tput el
+  printf "/"
+  read_edit new_pattern
+
+  stty -echo -icanon -isig time 0 min 1
+  tput civis
+
+#  [ -z "$new_pattern" ] && { draw_window; return; }
+
+  run_search "$new_pattern" && draw_window
+}
+
+# ------------------------------------------------------------
+# RUN NEW SEARCH
+# ------------------------------------------------------------
+run_search() {
+  local new_pattern="$1"
+
+  if ! perform_search "$new_pattern"; then
+    return 1
+  fi
+
+  pattern="$new_pattern"
+  index=0
+  top=0
+
+  if [ ${#lines[@]} -eq 0 ]; then
+    tput cup "$msg_row" 0
+    tput el
+    printf "No matches found.\n"
+    printf "Use '/' to try another search pattern\n"
+    printf "Use 'a' in interactive mode to add an entry.\n"
+    return 0
+  fi
+
+}
+
+# ------------------------------------------------------------
+# PROMPT FOR SEARCH AFTER VAULT SWITCH
+# ------------------------------------------------------------
+prompt_search_after_vault_switch() {
+  local new_pattern
+
+  clear
+  tput cup 0 0
+  printf "Selected vault: %s\n\n" "$vault_name"
+  printf "No entries are currently displayed for this vault.\n\n"
+  printf "Search pattern: "
+
+  tput cnorm
+  stty echo icanon 2>/dev/null
+  read_edit new_pattern
+  stty -echo -icanon time 0 min 1
+  tput civis
+
+  if [ -n "$new_pattern" ]; then
+    run_search "$new_pattern"
+  fi
+}
+
+# ------------------------------------------------------------
+# TERMINAL MODE HELPERS
+# ------------------------------------------------------------
+restore_terminal_for_prompt() {
+  tput cnorm
+  stty echo icanon 2>/dev/null
+  clear
+}
+
+restore_terminal_for_ui() {
+  stty -echo -icanon time 0 min 1
+  tput civis
+}
+
+# ------------------------------------------------------------
+# UPDATE DISPLAY SIZE
+# ------------------------------------------------------------
+update_display_size() {
+  local cols lines_count
+
+  cols=$(tput cols 2>/dev/null)
+  lines_count=$(tput lines 2>/dev/null)
+
+  [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
+  [[ "$lines_count" =~ ^[0-9]+$ ]] || lines_count=24
+
+  (( cols < 20 )) && cols=20
+  (( lines_count < 8 )) && lines_count=8
+
+  max_total=$cols
+  win_size=$((lines_count - 6))
+  (( win_size < 1 )) && win_size=1
+  msg_row=$((win_size + 4))
+}
+
+# ------------------------------------------------------------
+# POPUP VIEW
+# ------------------------------------------------------------
+draw_popup() {
+  local field1 field2 field3 field4 mid state
+  local item
+  local -a extra_fields
+
+  split_entry_fields "${lines[$index]}" field1 field2 field3 field4
+
+  if (( popup_show )); then
+    mid="$field3"
+    state="${VISABLE_BG}${HIGHLIGHT_FG}VISIBLE${HIGHLIGHT_OFF}"
+  else
+    printf -v mid '%*s' "${#field3}" ''
+    mid=${mid// /'*'}
+    state="hidden "
+  fi
+
+  clear
+
+  tput cup 0 0
+  draw_header
+  printf "\nEnter,l = close | s,h = Toggle Secret | %s" "$state"
+
+  tput cup 3 0
+  printf "%s\n\n" "TITLE : $field1"
+  printf "%s\n" "ID    : $field2"
+  printf "%s\n" "SECRET: $mid"
+
+  printf "\n\nCOMMENTS\n-------------------------\n"
+
+  if [ -n "$field4" ]; then
+    IFS='|' read -r -a extra_fields <<< "$field4"
+    for item in "${extra_fields[@]}"; do
+      item="${item#${item%%[![:space:]]*}}"
+      item="${item%${item##*[![:space:]]}}"
+      printf "%s\n" "$item"
+    done
+  fi
+
+  printf "\n"
+}
+
+# ------------------------------------------------------------
+# SCROLL / VISIBILITY MANAGEMENT
+# ------------------------------------------------------------
+ensure_visible() {
+  (( index < top )) && { top=$index; return 0; }
+  (( index >= top + win_size )) && { top=$((index - win_size + 1)); return 0; }
+  return 1
+}
+
+move_selection_partial() {
+  local old_index="$1"
+  draw_status
+  draw_line $((old_index - top + 3)) "$old_index"
+  draw_line $((index - top + 3)) "$index"
+}
+
+redraw_current_line() {
+  draw_status
+  draw_line $((index - top + 3)) "$index"
+}
+
+jump_to_index() {
+  local new_index="$1"
+  local old_index=$index
+  local last_index
+
+  [ ${#lines[@]} -eq 0 ] && return
+
+  last_index=$((${#lines[@]} - 1))
+  index=$new_index
+
+  (( index < 0 )) && index=$last_index
+  (( index > last_index )) && index=0
+
+  if ensure_visible; then
+    draw_window
+  else
+    move_selection_partial "$old_index"
+  fi
+}
+
+page_up() {
+  jump_to_index $((index - win_size))
+}
+
+page_down() {
+  jump_to_index $((index + win_size))
+}
+
+# ------------------------------------------------------------
+# INTERACTIVE VAULT SELECTOR
+# ------------------------------------------------------------
+draw_vault_picker() {
+  local row i marker current line create_index
+
+  clear
+  tput cup 0 0
+  printf "Select vault - Enter=select | q/Esc=cancel\n\n"
+
+  for ((i=0; i<${#vaults[@]}; i++)); do
+    row=$((i + 2))
+    marker="  "
+    current=""
+
+    [ "$i" -eq "$vault_pick" ] && marker="> "
+    [ "${vaults[$i]}" = "$vault_name" ] && current="  (active)"
+
+    line="${marker}${vaults[$i]}${current}"
+
+    tput cup "$row" 0
+    tput el
+
+    if [ "$i" -eq "$vault_pick" ]; then
+      printf "%s%s%s" "$HIGHLIGHT_ON" "$line" "$HIGHLIGHT_OFF"
+    else
+      printf "%s" "$line"
+    fi
+  done
+
+  create_index=${#vaults[@]}
+  row=$((create_index + 3))
+  marker="  "
+  [ "$vault_pick" -eq "$create_index" ] && marker="> "
+  line="${marker}Create New Vault"
+
+  tput cup "$row" 0
+  tput el
+
+  if [ "$vault_pick" -eq "$create_index" ]; then
+    printf "%s%s%s" "$HIGHLIGHT_ON" "$line" "$HIGHLIGHT_OFF"
+  else
+    printf "%s" "$line"
+  fi
+}
+
+create_new_vault() {
+  local new_vault old_vault old_file tmp_file
+
+  old_vault="$vault_name"
+  old_file="$file"
+
+  clear
+  tput cup 0 0
+  printf "Create New Vault\n\n"
+  printf "Vault name: "
+
+  tput cnorm
+  stty echo icanon 2>/dev/null
+  read_edit new_vault
+  stty -echo -icanon time 0 min 1
+  tput civis
+  printf "\n\n"
+
+  if [ -z "$new_vault" ]; then
+    draw_window
+    return
+  fi
+
+  case "$new_vault" in
+    */*|*' '*|.*|*..*)
+      clear
+      printf "Invalid vault name: %s\n\n" "$new_vault"
+      printf "Use a simple name without spaces or slashes.\n\n"
+      printf "Press any key to return..."
+      while IFS= read -r -s -n1 _; do break; done
+      draw_window
+      return
+      ;;
+  esac
+
+  vault_name="$new_vault"
+  file="$vpath/${vault_name}.gpg"
+
+  if [ -f "$file" ]; then
+    clear
+    printf "Vault already exists: %s\n\n" "$vault_name"
+    printf "Press any key to return..."
+    vault_name="$old_vault"
+    file="$old_file"
+    while IFS= read -r -s -n1 _; do break; done
+    draw_window
+    return
+  fi
+
+  printf "You need to enter a master password for this vault.\n"
+  printf "You need this master password anytime you run pget,\n"
+  printf "add, modify, or remove an entry.\n\n"
+  printf "Master passwords are not recoverable.\n\n"
+  printf "Every vault you create can have a unique master password.\n"
+  printf "Lose the master password and access to data is lost.\n"
+  printf "Vault location: %s\n\n" "$vpath"
+  printf "A Backup is created on each write of the vault.\n"
+  printf "Backup location: %s\n\n" "$bpath"
+  printf "Hit [enter] to get started."
+
+  tput cnorm
+  stty echo icanon 2>/dev/null
+  IFS= read -r _
+
+  mkdir -p "$vpath" "$bpath"
+
+  vault_all_lines=()
+  vault_all_lines+=("# Title [tab] ID [tab] password [tab] Comments")
+  vault_all_lines+=($'Sample\tjohndoe@sample123.com\tPeaG3tis#1atlnx!\tSample Entry | Subscription Expires 12/26 | https://sample123.com')
+
+  tmp_file="$file.tmp.$$"
+
+  printf "%s\n" "${vault_all_lines[@]}" | \
+    gpg -c --cipher-algo AES256 --digest-algo SHA512 \
+      --compress-algo none -o "$tmp_file"
+
+  if [ $? -ne 0 ]; then
+    rm -f "$tmp_file"
+    vault_name="$old_vault"
+    file="$old_file"
+    stty -echo -icanon time 0 min 1
+    tput civis
+    draw_window
+    tput cup "$msg_row" 0
+    tput el
+    printf "Failed to create vault."
+    return
+  fi
+
+  mv "$tmp_file" "$file"
+
+  stty -echo -icanon time 0 min 1
+  tput civis
+
+  pattern=""
+  index=0
+  visible=0
+  top=0
+  lines=()
+
+  add_entry
+}
+
+switch_vault() {
+  local selected="$1"
+
+  vault_name="$selected"
+  file="$vpath/${vault_name}.gpg"
+  pattern=""
+  index=0
+  visible=0
+  top=0
+
+  perform_search "$pattern" || return
+
+  if [ ${#lines[@]} -eq 0 ]; then
+    prompt_search_after_vault_switch
+  fi
+
+  draw_window
+
+  tput cup "$msg_row" 0
+  tput el
+  printf "%s" "${COPIED_BG}${HIGHLIGHT_FG}Selected vault: ${vault_name}${HIGHLIGHT_OFF}"
+}
+
+select_vault() {
+  local key k1 k2 i create_index
+
+  load_vaults
+
+  create_index=${#vaults[@]}
+
+  vault_pick=0
+  for ((i=0; i<${#vaults[@]}; i++)); do
+    if [ "${vaults[$i]}" = "$vault_name" ]; then
+      vault_pick=$i
+      break
+    fi
+  done
+
+  draw_vault_picker
+
+  while IFS= read -r -s -n1 key; do
+    case "$key" in
+      $'\033')
+        IFS= read -r -s -n1 k1 || true
+        if [ "$k1" = "[" ]; then
+          IFS= read -r -s -n1 k2 || true
+          case "$k2" in
+            A)
+              if (( vault_pick <= 0 )); then
+                vault_pick=$create_index
+              else
+                vault_pick=$((vault_pick - 1))
+              fi
+              ;;
+            B)
+              if (( vault_pick >= create_index )); then
+                vault_pick=0
+              else
+                vault_pick=$((vault_pick + 1))
+              fi
+              ;;
+          esac
+          draw_vault_picker
+        else
+          draw_window
+          return
+        fi
+        ;;
+      j|J)
+        if (( vault_pick >= create_index )); then
+          vault_pick=0
+        else
+          vault_pick=$((vault_pick + 1))
+        fi
+        draw_vault_picker
+        ;;
+      k|K)
+        if (( vault_pick <= 0 )); then
+          vault_pick=$create_index
+        else
+          vault_pick=$((vault_pick - 1))
+        fi
+        draw_vault_picker
+        ;;
+      q|Q)
+        draw_window
+        return
+        ;;
+      '')
+        if [ "$vault_pick" -eq "$create_index" ]; then
+          create_new_vault
+        else
+          switch_vault "${vaults[$vault_pick]}"
+        fi
+        return
+        ;;
+    esac
+  done
+}
+
+# ------------------------------------------------------------
+# SIGNAL HANDLER
+# ------------------------------------------------------------
+handle_sigint() {
+  tput cup "$msg_row" 0
+  tput el
+  printf "Use 'c' to copy (Ctrl-C disabled)\n"
+}

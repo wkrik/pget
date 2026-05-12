@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+
+# ------------------------------------------------------------
+# pget-lib-readline
+# Readline prompt helpers
+#
+# Required for pget to function
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# READLINE PROMPT HELPERS
+# Keep read -e line editing, but disable tab completion while
+# prompts are active so tab does not list current directory files.
+# ------------------------------------------------------------
+readline_completion_off() {
+  bind 'set disable-completion on' 2>/dev/null || true
+  bind '"       ": self-insert' 2>/dev/null || true
+}
+
+readline_completion_on() {
+  bind 'set disable-completion off' 2>/dev/null || true
+  bind '"       ": complete' 2>/dev/null || true
+}
+
+read_prompt() {
+  local __var="$1"
+  local __prompt="$2"
+  local __rc
+
+  readline_completion_off
+  read -e -r -p "$__prompt" "$__var"
+  __rc=$?
+  readline_completion_on
+
+  return $__rc
+}
+
+read_edit() {
+  local __var="$1"
+  local __rc
+
+  readline_completion_off
+  IFS= read -e -r "$__var"
+  __rc=$?
+  readline_completion_on
+
+  return $__rc
+}

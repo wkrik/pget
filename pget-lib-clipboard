@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+# ------------------------------------------------------------
+# pget-lib-clipboard.sh
+# OSC52 clipboard handling
+#
+# Required for pget to function
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# CLIPBOARD COPY
+# OSC52 works over many SSH-capable terminal sessions.
+# ------------------------------------------------------------
+copy_to_clipboard() {
+  local str b64
+
+  str="$1"
+  b64=$(printf "%s" "$str" | base64 | tr -d '\n')
+
+  printf "\033]52;c;%s\a" "$b64"
+}

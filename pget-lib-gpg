@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+# ------------------------------------------------------------
+# pget-lib-gpg
+# GPG handling, agent control, and environment setup
+#
+# Required for pget to function
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# GPG TERMINAL SETUP
+# Needed so pinentry uses the correct TTY when prompting
+# ------------------------------------------------------------
+pget_gpg_init() {
+  if tty -s; then
+    export GPG_TTY=$(tty)
+  fi
+}
+
+# ------------------------------------------------------------
+# KILL GPG AGENT
+# Clears cached passphrases (all keys/vaults)
+# ------------------------------------------------------------
+kill_gpg_agent() {
+  gpgconf --kill gpg-agent 2>/dev/null
+}
+
+# ------------------------------------------------------------
+# OPTIONAL: SAFE DECRYPT WRAPPER
+# (No behavior change yet — just structured for future use)
+# ------------------------------------------------------------
+pget_gpg_decrypt() {
+  local file="$1"
+  gpg -dq "$file"
+}
+
+# ------------------------------------------------------------
+# OPTIONAL: SAFE ENCRYPT WRAPPER
+# (Matches your existing flags exactly)
+# ------------------------------------------------------------
+pget_gpg_encrypt() {
+  local outfile="$1"
+
+  gpg -c \
+    --cipher-algo AES256 \
+    --digest-algo SHA512 \
+    --compress-algo none \
+    -o "$outfile"
+}
+
+# ------------------------------------------------------------
+# AUTO-KILL HANDLER (used by cleanup)
+# ------------------------------------------------------------
+pget_gpg_maybe_kill_agent() {
+  if [ "${AUTO_KILL_GPG_AGENT:-0}" -eq 1 ]; then
+    kill_gpg_agent
+  fi
+}

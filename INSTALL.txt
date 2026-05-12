@@ -1,0 +1,205 @@
+PGET
+
+Is a lightweight, Linux, terminal-based password manager
+that stores secrets in encrypted vault files using AES256,
+giving users full control over their data and security.
+
+pget runs on all Debian (Ubuntu, Kali, LinuxMint, etc) and 
+Fedora (RHEL, AlmaLinux, Rocky Linux, etc) Linux flavors.
+
+No compiling necessary. pget is entirely written in bash 
+with calls to gpg and vim-gnupg plugin.
+
+Prerequisite: 
+vim, vim-runtime, gnupg, pwgen (optional)
+
+----------------------------------------------------------
+
+There are 2 installations methods that can be used:
+Automated and Manual.
+
+AUTOMATED: The easiest method
+-----------------------------
+
+$ ./setup_pget
+
+Your done.
+
+
+MANUAL: 
+-------------------------------------------------
+1. Install the prerequisites:
+
+  Note: pwgen is optional. Two other methods can be used
+        to generate a password: openssl, and urandom.
+        Your can choose in the main pget script: $PWGEN
+        (See "CUSTOMIZING PGET" section below)
+
+   Debian:
+
+     $ sudo apt install vim vim-runtime gnupg pwgen
+
+   Fedora:
+
+     $ sudo dnf install vim vim-enhanced gnupg pwgen
+
+2. Go to the parent directory of pget:
+
+     $ cd /path/to/parent
+     $ ls pget/
+
+3. Append the vimrc plugin configurations to ~/.vimrc:
+
+     $ cat pget/vimrc.conf >> ~/.vimrc
+
+4. Copy pget into /opt
+
+     If /opt does not exist:
+       $ sudo mkdir -p /opt
+
+     $ sudo cp -r pget /opt/
+ 
+5. Link path to executable
+
+     $ sudo ln -s /opt/pget/pget /usr/local/bin/pget
+
+That's it! 
+
+TEST INSTALLATION:
+------------------
+1. Test vim encryption
+
+     $ vim test.gpg
+       This is a test
+       :wq
+
+   You should be prompted for a passphrase.
+
+2. Verify AES256 encryption, and the file can be decrypted:
+
+   $ gpg --list-packets test.gpg 2>&1 | grep 'encrypted data'
+
+   $ gpg -d test.gpg
+
+
+START PGET
+----------
+pget will go through a first time launch process.
+
+   $ ./pget
+
+
+----------------------------------------------------------
+CUSTOMIZING PGET
+
+The following variables can be changed in the pget main
+script to your preference. If a pget upgrade is performed, 
+these will need to be changed again.
+
+Where all the vaults live: 
+
+  vpath="$HOME/vault"
+
+
+Where the backups are written:
+
+  bpath="$vpath/backups"
+
+  Note: Backups are performed incase one fat-fingers
+        a master password.
+
+
+How many backups are taken before it recycles:
+
+  auto_prune=10
+
+
+The name of the "Default" vault.
+
+  vault_name="Primary"
+
+
+Choose your favorie password generator. A 15 character 
+Minimum is recommended:
+
+  #PWGEN="pwgen -s 15 1"
+  #PWGEN="openssl rand -base64 15"
+  PWGEN="head -c 15 /dev/urandom | base64"
+
+
+By default, GPG caches the passphrase for about
+10 minutes after exiting pget. Setting this to 1
+kills the GPG agent on exit for improved security,
+but requires re-entering the password next time.
+
+  AUTO_KILL_GPG_AGENT=0
+
+
+While ths window frame auto-resizes, these settings
+control display width and truncation behavior for
+long entries.
+
+  max_total=80
+  win_size=20
+  msg_row=0
+
+
+Controls the colors used in pget
+  Ascii Color Chart:
+  https://raw.githubusercontent.com/fidian/ansi/master/images/color-codes.png
+
+  HIGHLIGHT_ON=$(tput setab 236 2>/dev/null || printf '\033[48;5;236m')
+  HIGHLIGHT_OFF=$(tput sgr0 2>/dev/null || printf '\033[0m')
+  HIGHLIGHT_FG=$(tput setaf 7 2>/dev/null || printf '\033[47m')
+  VISABLE_BG=$(tput setab 88 2>/dev/null || printf '\033[48;5;88m')
+  PATTERN_FONT_FG=$(tput setaf 6 2>/dev/null || printf '\033[36m')
+  COPIED_BG=$(tput setab 2 2>/dev/null || printf '\033[42m')
+  VAULT_FG=$(tput setaf 208 2>/dev/null || printf '\033[208m')
+
+----------------------------------------------------------
+
+THINGS TO KNOW:
+
+* Where are my fault files:
+
+   $ cd ~/vault
+
+* Where are backups kept:
+
+   $ cd ~/vault/backups
+
+* How often does the vault get backups take place:
+
+   Everytime the vault changes when entries are added, 
+   modified, or deleted
+
+* How do I upgrade to a newer version.
+
+  Automated:
+  ----------
+  In the pget directory of the new version, run: 
+    $ ./setup_pget
+
+  It will check/validate the current and new versions.
+  Once everything is validated, it updates the version.
+
+  Manual:
+  -------
+  Since you already have .vimrc files configured, and 
+  the symlink /usr/local/bin/pget in place, just rename 
+  the current version and copy in the new version.
+
+  get the current version installed:
+    $ pget --version
+
+  Move the current version out of the way.
+
+    $ sudo mv /opt/pget /opt/pget-[version]
+  
+  Copy the new version (at the pget parent directory) in place:
+
+    $ sudo cp -r pget/ /opt/
+
+
+  That's it. 
+
