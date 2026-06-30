@@ -1,17 +1,4 @@
 ## PGET Image Gallery
-0. Help Page
-1. Command Line Search
-2. Search Results
-3. Making Secret Visible
-4. View All Entries
-5. Copy To Clipboard
-6. Full Entry View
-7. Add An Entry
-8. Add Entry with Multiple ID's and Comments
-9. Setup and Search Categories
-10. Selecting and Creating Multiple Vaults
-
----
 
 ## 0. Help Page
 <img src="/gallery/00-PGET-Help_Page.jpg"><p>

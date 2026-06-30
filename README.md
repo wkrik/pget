@@ -1,16 +1,23 @@
-# pget - Password Management tool
+## pget - Password Management tool
+
 ![Password Manager](https://img.shields.io/badge/Type-Password%20Manager-darkred) ![Passwords](https://img.shields.io/badge/Passwords-Encrypted-critical) ![Secrets](https://img.shields.io/badge/Secrets-Protected-success) ![Vault](https://img.shields.io/badge/Vault-GPG%20Encrypted-red)  ![Shell](https://img.shields.io/badge/Shell-POSIX%20sh-black) ![Linux](https://img.shields.io/badge/Platform-Linux-darkgreen) ![Encryption](https://img.shields.io/badge/Encryption-GPG%20AES256-red) ![Security](https://img.shields.io/badge/Security-Local%20Vault-critical) ![Terminal](https://img.shields.io/badge/UI-Terminal-lightgrey)
-![No Cloud](https://img.shields.io/badge/Cloud-None-success)
+![No Cloud](https://img.shields.io/badge/Cloud-None-success) ![WSL](https://img.shields.io/badge/WSL-supported-blue?logo=linux&logoColor=white)
 
-pget is a feature rich interactive Linux CLI bash based Password Management tool using GPG-(AES256) backed encryption.<p>
+**pget** is a feature rich interactive Linux CLI bash based Password Management tool using GPG-(AES256) backed encryption. Runs on on **Debian** (Kali, Ubuntu, Linux Mint, Zoran, etc); **Fedora** (Redhat, AlmaLinux Rocky Linux, etc); **WSL** (Windows Subsystem for Linux).
 
-<img src="./gallery/02-PGET-Search_Results_For_bank.jpg" width="70%"><p>
-<a href=./gallery><b>VIEW GALLERY</b></font></a>
+### Watch the short demo:
+<p align="left">
+  <a href="https://www.youtube.com/watch?v=_Mkx6ab1hAk" target=pget>
+    <img src="https://img.youtube.com/vi/_Mkx6ab1hAk/maxresdefault.jpg" height=280>
+  </a>
+</p>
+
+<a href=./gallery><b>VIEW THE IMAGE GALLERY</b></font></a>
 
 ---
 ## Security Model Overview
 The following is a security-focused comparison between pget and a typical cloud-based password management tools. 
-<br>Read the full <a href=./SECURITY_Review.md><b>Security Review</b></a>. 
+<p>
 
 | Security Area | pget | Cloud Password Manager |
 | --- | --- | --- |
@@ -21,6 +28,8 @@ The following is a security-focused comparison between pget and a typical cloud-
 | Encryption model | 🟢 GPG symmetric encryption | 🟢 Vendor-managed strong encryption |
 | Offline use | 🟢 Fully offline | 🟡 Often limited or cached |
 | Account takeover risk | 🟢 No online account | 🔴 Online account can be attacked |
+
+**Read the full** <a href=./SECURITY_Review.md><b>Security Review</b></a>. 
 
 ---
 ## Features
@@ -65,6 +74,26 @@ The following is a security-focused comparison between pget and a typical cloud-
 * Edge Case Handling
 
 ---
+## Download
+There are 3 methods for downloading from your local linux based device:
+
+**git**:
+```
+$ git clone https://github.com/wkrik/pget
+```
+**curl or wget**: Extract the **zip'd tar file**
+```
+$ wget https://github.com/wkrik/pget/releases/download/v2.138/pget-v2.138.tz
+$ curl -O https://github.com/wkrik/pget/releases/download/v2.138/pget-v2.138.tz
+
+$ tar xvzf pget-v2.138.tz
+```
+**Web browser**: Go to the URL
+```
+https://github.com/wkrik/pget/releases/download/v2.138/pget-v2.138.tz
+```
+
+---
 
 ## Installation
 
@@ -82,7 +111,7 @@ Your done. Scroll down to testing and launching.
 
 **1.  Install the prerequisites:**
 
-*Note: pwgen (password generator) is optional. Two other methods can be used to generate a password in pget: openssl, and urandom. It is set ($PWGEN) in the main pget script.*
+ - **Note:** pwgen (password generator) is optional. Two other methods can be used to generate a password in pget: openssl, and urandom. It is set ($PWGEN) in the main pget script.
 
 Debian (ubuntu, Linux Mint, Kali, ...):
 ```
@@ -91,8 +120,9 @@ Debian (ubuntu, Linux Mint, Kali, ...):
 
 Fedora (RedHat, AlmaLinux, Rocky Linux, ...):
 ```
-	$ sudo dnf install vim vim-enhanced gnupg pwgen
+	$ sudo dnf install vim vim-enhanced gnupg pwgen pinentry pinentry-curses
 ```
+ - **Note:** Some version of Fedora require the epel-release package be installed for pwgen. 
 
 **2.  Go to the parent directory of pget:**
     
@@ -161,6 +191,27 @@ Each time afer, use a search pattern
    $ ./pget pattern
 ```
 
+Usage:
+```
+$ pget [-v vault_name] [-E | -l | -x | --help] pattern
+```
+| Argument | Description |
+| ----- | -----|
+| -v | vault to connect to |
+| -E | Edit encrypted file |
+| -l | List available aults |
+| -x  | Kill gpg-agent cache for all vaults (force password) | 
+| --help | Displays help page |
+| --version | get current version number | 
+| pattern | Pattern to search, use " " for multiple patterns to search |
+
+## Project Goals
+pget was originally started in 2002 as a personal password management tool and evolved over time into a hardened interactive CLI vault manager focused on privacy, portability, and terminal efficiency. New Features and cosmetic updates are in the works.
+
+Built for Linux users, terminal enthusiasts, system administrators, privacy advocates, and cybersecurity professionals.
+
 ## Support
 
-Use the Discussion Group for any comments or feature requests, and Issues to report any issues.
+First check out he <a href=/docs/Troubleshooting.md>Troubleshoot</a> guide.
+
+Use the Discussion Group for any comments, questions, and feature requests, or Issues to report any issues.
