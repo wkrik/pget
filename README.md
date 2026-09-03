@@ -198,8 +198,8 @@ $ pget [-v vault_name] [-E | -l | -x | --help] pattern
 | Argument | Description |
 | ----- | -----|
 | -v | vault to connect to |
-| -E | Edit encrypted file |
-| -l | List available aults |
+| -E | Edit encrypted vault |
+| -l | List available vaults |
 | -x  | Kill gpg-agent cache for all vaults (force password) | 
 | --help | Displays help page |
 | --version | get current version number | 
